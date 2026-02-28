@@ -246,6 +246,10 @@ const STARLINK_CACHE_KEY = 'satTracker_starlink_v2';
 const CACHE_TTL_MS       = 15 * 60 * 1000;
 // Coverage footprint: ~600 km altitude, 25° minimum elevation angle → 9.1° Earth central angle
 const COVERAGE_RADIUS_DEG = 9.1;
+// Trails: sample position every N ms, keep last M samples
+const TRAIL_SAMPLE_MS    = 6000;
+const KUIPER_TRAIL_LEN   = 15;   // 15 × 6 s = 90 s of history
+const STARLINK_TRAIL_LEN = 6;    //  6 × 6 s = 36 s of history
 const FCC_MILESTONES = [
   { label: 'Phase 1', target:  578, deadline: new Date('2026-07-30'), deadlineStr: 'Jul 2026' },
   { label: 'Phase 2', target: 1156, deadline: new Date('2027-07-30'), deadlineStr: 'Jul 2027' },
@@ -339,6 +343,49 @@ function updateCoveragePolygons() {
     ? kuiperData.filter(d => !isNaN(d.lat)).map(d => coverageCircle(d.lat, d.lng))
     : [];
   globe.polygonsData([...countriesCache.features, ...circles]);
+}
+
+// ── Satellite trails ──────────────────────────────────────────────────────────
+// Back-compute Kuiper trail history from TLE so trails appear immediately on load
+function initTrails() {
+  const now = Date.now();
+  kuiperData.forEach(d => {
+    d.trail = [];
+    for (let i = KUIPER_TRAIL_LEN - 1; i >= 0; i--) {
+      const t    = new Date(now - i * TRAIL_SAMPLE_MS);
+      const gmst = satellite.gstime(t);
+      const eci  = satellite.propagate(d.satrec, t);
+      if (eci?.position) {
+        const geo = satellite.eciToGeodetic(eci.position, gmst);
+        d.trail.push({
+          lat: satellite.radiansToDegrees(geo.latitude),
+          lng: satellite.radiansToDegrees(geo.longitude),
+          alt: geo.height / EARTH_RADIUS_KM,
+        });
+      }
+    }
+  });
+  starlinkData.forEach(d => { d.trail = []; });
+}
+
+function sampleTrails() {
+  [...kuiperData, ...starlinkData].forEach(d => {
+    if (isNaN(d.lat)) return;
+    const maxLen = d.constellation === 'kuiper' ? KUIPER_TRAIL_LEN : STARLINK_TRAIL_LEN;
+    if (!d.trail) d.trail = [];
+    d.trail.push({ lat: d.lat, lng: d.lng, alt: d.alt });
+    if (d.trail.length > maxLen) d.trail.shift();
+  });
+  updateTrailsData();
+}
+
+function updateTrailsData() {
+  if (!globe) return;
+  const paths = [
+    ...(showKuiper   ? kuiperData.filter(d => d.trail?.length >= 2)   : []),
+    ...(showStarlink ? starlinkData.filter(d => d.trail?.length >= 2) : []),
+  ];
+  globe.pathsData(paths);
 }
 
 // ── FCC milestone tracker ─────────────────────────────────────────────────────
@@ -644,8 +691,26 @@ function initGlobe() {
       const el = document.createElement('div');
       el.className = `sat-dot ${d.constellation}`;
       return el;
-    });
+    })
+    .pathsData([])
+    .pathPoints(d => d.trail)
+    .pathPointLat(p => p.lat)
+    .pathPointLng(p => p.lng)
+    .pathPointAlt(p => p.alt)
+    .pathColor(d => {
+      const n = d.trail.length;
+      if (n < 2) return [];
+      return d.trail.map((_, i) => {
+        const t = i / (n - 1);
+        return d.constellation === 'kuiper'
+          ? `rgba(204,0,255,${(t * 0.6).toFixed(2)})`
+          : `rgba(0,212,255,${(t * 0.5).toFixed(2)})`;
+      });
+    })
+    .pathStroke(1)
+    .pathTransitionDuration(0);
 
+  initTrails();
   setTimeout(() => globe.pointOfView({ altitude: 3.5 }));
 
   updateCountBadge();
@@ -673,7 +738,7 @@ function initGlobe() {
 
   setProgress(94);
   setStatus('Starting…');
-  setTimeout(() => { setProgress(100); setTimeout(() => { dismissOverlay(); startAnimationLoop(); }, 300); }, 500);
+  setTimeout(() => { setProgress(100); setTimeout(() => { dismissOverlay(); startAnimationLoop(); updateTrailsData(); setInterval(sampleTrails, TRAIL_SAMPLE_MS); }, 300); }, 500);
 }
 
 // ── Position update ───────────────────────────────────────────────────────────
@@ -709,6 +774,7 @@ document.getElementById('toggle-kuiper').addEventListener('click', () => {
   updateGlobeData();
   updateCountBadge();
   updateCoveragePolygons();
+  updateTrailsData();
 });
 
 document.getElementById('toggle-starlink').addEventListener('click', () => {
@@ -716,6 +782,7 @@ document.getElementById('toggle-starlink').addEventListener('click', () => {
   document.getElementById('toggle-starlink').classList.toggle('active', showStarlink);
   updateGlobeData();
   updateCountBadge();
+  updateTrailsData();
 });
 
 
