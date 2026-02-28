@@ -383,8 +383,79 @@ async function loadSatelliteData() {
   initGlobe();
 }
 
+// ── WebGL detection ───────────────────────────────────────────────────────────
+function isWebGLAvailable() {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl') || c.getContext('experimental-webgl'));
+  } catch (_) { return false; }
+}
+
+// ── 2D canvas fallback (no WebGL required) ────────────────────────────────────
+function initFallback2D() {
+  setStatus('2D mode — WebGL unavailable');
+  setProgress(84);
+
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;inset:0;';
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  document.getElementById('globe-container').appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+
+  window.addEventListener('resize', () => {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+  });
+
+  let countryFeatures = [];
+  countryDataPromise.then(({ polygons }) => { countryFeatures = polygons.features; }).catch(() => {});
+
+  function project(lng, lat) {
+    return [(lng + 180) / 360 * canvas.width, (90 - lat) / 180 * canvas.height];
+  }
+
+  function drawGeo(f) {
+    const drawRings = rings => rings.forEach(ring => {
+      ring.forEach(([lng, lat], i) => { const [x, y] = project(lng, lat); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.closePath();
+    });
+    ctx.beginPath();
+    if (f.geometry.type === 'Polygon') drawRings(f.geometry.coordinates);
+    else if (f.geometry.type === 'MultiPolygon') f.geometry.coordinates.forEach(drawRings);
+    ctx.stroke();
+  }
+
+  function draw2D() {
+    ctx.fillStyle = '#0e0e0e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'rgba(201,168,76,0.25)';
+    ctx.lineWidth = 0.5;
+    countryFeatures.forEach(drawGeo);
+    satData.forEach(d => {
+      if (isNaN(d.lat)) return;
+      const [x, y] = project(d.lng, d.lat);
+      ctx.fillStyle = '#cc00ff';
+      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    });
+  }
+
+  countBadge.textContent = satData.length.toLocaleString() + ' satellites tracked';
+  setProgress(94);
+  setStatus('Starting…');
+  setTimeout(() => {
+    setProgress(100);
+    setTimeout(() => {
+      dismissOverlay();
+      (function frame() { requestAnimationFrame(frame); updatePositions(); draw2D(); })();
+    }, 300);
+  }, 500);
+}
+
 // ── Globe initialisation ──────────────────────────────────────────────────────
 function initGlobe() {
+  if (!isWebGLAvailable()) { initFallback2D(); return; }
+
   setStatus('Initialising globe…');
   setProgress(84);
 
