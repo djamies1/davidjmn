@@ -187,6 +187,11 @@
     <button id="play-btn" title="Play / Pause" aria-label="Play or Pause simulation">&#9646;&#9646;</button>
     <div id="utc-time">—</div>
   </div>
+  <div class="ctrl-row">
+    <span class="speed-label">Speed</span>
+    <input type="range" id="speed-slider" min="-1" max="1.699" step="0.05" value="0.477" aria-label="Simulation speed">
+    <span id="speed-val">3×</span>
+  </div>
   <div class="legend">
     <div class="legend-item">
       <div class="legend-dot" style="background:#cc00ff"></div>
@@ -259,14 +264,24 @@ function dismissOverlay() {
 
 // ── State ────────────────────────────────────────────────────────────────────
 let globe;
-let satData = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
-let frozenTime = null; // non-null when paused
-let playing = true;
+let satData  = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
+let simTime  = new Date();
+let playing  = true;
+let speedMult = 3;
+
+function frameStep() { return (1000 / 60) * speedMult; }
+
+// ── Speed slider (log scale: -1 → 0.1×, 1.699 → 50×) ────────────────────────
+function updateSpeedDisplay() {
+  speedMult = Math.pow(10, parseFloat(speedSlider.value));
+  speedValEl.textContent = speedMult < 10 ? speedMult.toFixed(1) + '×' : Math.round(speedMult) + '×';
+}
+speedSlider.addEventListener('input', updateSpeedDisplay);
+updateSpeedDisplay();
 
 // ── Play / Pause ──────────────────────────────────────────────────────────────
 playBtn.addEventListener('click', () => {
   playing = !playing;
-  frozenTime = playing ? null : new Date();
   playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
 });
 
