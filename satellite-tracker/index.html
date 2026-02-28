@@ -80,6 +80,41 @@
   }
   #count-badge.visible { opacity: 1; }
 
+  /* ── Satellite dots ── */
+  .sat-dot {
+    width: 4px; height: 4px; border-radius: 50%;
+    pointer-events: none; user-select: none;
+  }
+  .sat-dot.kuiper   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.45); }
+  .sat-dot.starlink { background: #e8e8ff; box-shadow: 0 0 5px 2px rgba(220,220,255,0.4); }
+
+  /* ── Toggle panel — fixed top-right ── */
+  #toggle-panel {
+    position: fixed; top: 5.5rem; right: 1.75rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+    z-index: 100; opacity: 0; transition: opacity 0.5s ease;
+  }
+  #toggle-panel.visible { opacity: 1; }
+
+  .toggle-btn {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: rgba(14,14,14,0.82); border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.5); font-size: 0.68rem; font-family: monospace;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 0.35rem 0.85rem; border-radius: 100px;
+    cursor: pointer; backdrop-filter: blur(8px);
+    transition: border-color 0.2s, color 0.2s; outline: none;
+  }
+  .toggle-btn.kuiper.active   { border-color: rgba(204,0,255,0.4);   color: rgba(255,255,255,0.85); }
+  .toggle-btn.starlink.active { border-color: rgba(220,220,255,0.35); color: rgba(255,255,255,0.85); }
+  .toggle-btn .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    transition: opacity 0.2s, box-shadow 0.2s;
+  }
+  .toggle-btn.kuiper .dot   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.5); }
+  .toggle-btn.starlink .dot { background: #e8e8ff; box-shadow: 0 0 5px 2px rgba(220,220,255,0.45); }
+  .toggle-btn:not(.active) .dot { opacity: 0.25; box-shadow: none; }
+
   /* ── Launch table ── */
   #launch-table {
     position: fixed; top: 5.5rem; left: 1.75rem;
@@ -156,9 +191,15 @@
 <!-- Count badge -->
 <div id="count-badge">Loading…</div>
 
+<!-- Toggle panel -->
+<div id="toggle-panel">
+  <button id="toggle-kuiper"   class="toggle-btn kuiper active"><span class="dot"></span>Kuiper</button>
+  <button id="toggle-starlink" class="toggle-btn starlink active"><span class="dot"></span>Starlink</button>
+</div>
+
 <!-- Launch table -->
 <div id="launch-table">
-  <div class="lt-title">Launches</div>
+  <div class="lt-title">Kuiper Launches</div>
   <div class="lt-head"><span>Date</span><span>Rocket</span><span>Sats</span></div>
   <div id="lt-body"></div>
 </div>
@@ -173,24 +214,18 @@
 import * as satellite from 'https://esm.sh/satellite.js';
 import { feature as topoFeature } from 'https://esm.sh/topojson-client';
 
-const EARTH_RADIUS_KM = 6371;
-const CACHE_KEY    = 'satTracker_kuiper_v1';
-const CACHE_TTL_MS = 15 * 60 * 1000;
+const EARTH_RADIUS_KM    = 6371;
+const KUIPER_CACHE_KEY   = 'satTracker_kuiper_v2';
+const STARLINK_CACHE_KEY = 'satTracker_starlink_v2';
+const CACHE_TTL_MS       = 15 * 60 * 1000;
 
-// TLE text format — proven reliable for orbit propagation
-const CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=TLE';
-const FETCH_URLS = [
-  CELESTRAK_URL,
-  'https://corsproxy.io/?' + CELESTRAK_URL,
-  'https://api.allorigins.win/raw?url=' + encodeURIComponent(CELESTRAK_URL)
-];
-
-// ── Orbit classification ──────────────────────────────────────────────────────
-function classifyOrbit(altKm) {
-  if (altKm < 2000)  return { band: 'LEO', color: '#cc00ff' };
-  if (altKm < 35000) return { band: 'MEO', color: '#cc00ff' };
-  if (altKm < 36500) return { band: 'GEO', color: '#cc00ff' };
-  return { band: 'HEO', color: '#cc00ff' };
+function makeFetchUrls(group) {
+  const base = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=TLE`;
+  return [
+    base,
+    'https://corsproxy.io/?' + base,
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(base)
+  ];
 }
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -208,18 +243,38 @@ function dismissOverlay() {
   setTimeout(() => { overlay.style.display = 'none'; }, 750);
   countBadge.classList.add('visible');
   document.getElementById('launch-table').classList.add('visible');
+  document.getElementById('toggle-panel').classList.add('visible');
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
 let globe;
-let satData = [];
+let kuiperData   = [];
+let starlinkData = [];
+let showKuiper   = true;
+let showStarlink = true;
+
+function visibleData() {
+  return [...(showKuiper ? kuiperData : []), ...(showStarlink ? starlinkData : [])];
+}
+
+function updateGlobeData() {
+  if (globe) globe.htmlElementsData(visibleData());
+}
+
+function updateCountBadge() {
+  const parts = [];
+  if (showKuiper && kuiperData.length)     parts.push(kuiperData.length.toLocaleString() + ' Kuiper');
+  if (showStarlink && starlinkData.length) parts.push(starlinkData.length.toLocaleString() + ' Starlink');
+  if (!parts.length) {
+    // Both hidden — show totals dimmed
+    const total = (kuiperData.length + starlinkData.length).toLocaleString();
+    countBadge.textContent = total + ' satellites (hidden)';
+  } else {
+    countBadge.textContent = parts.join(' · ') + ' satellites tracked';
+  }
+}
 
 // ── Launch metadata ───────────────────────────────────────────────────────────
-// CelesTrak JSON has no LAUNCH_DATE field — only orbital elements.
-// Launch Library 2 is the sole source of dates + rocket names.
-// Mission names in LL2 are "Amazon Leo (KA-01)" etc., so we search "amazon leo".
-// We filter out future placeholder entries (net date > today) so they don't
-// contaminate positional matching against the 8 confirmed TLE launch batches.
 const ll2Promise = (async () => {
   const today = new Date().toISOString().slice(0, 10);
   const searches = ['amazon+leo', 'atlas+v+amazon'];
@@ -236,7 +291,7 @@ const ll2Promise = (async () => {
       const data = await r.json();
       const results = (data.results || [])
         .map(l => ({ date: (l.net || '').slice(0, 10), rocket: l.rocket?.configuration?.name || '—', name: l.name || '' }))
-        .filter(l => l.date && l.date <= today)   // exclude future placeholders
+        .filter(l => l.date && l.date <= today)
         .sort((a, b) => a.date.localeCompare(b.date));
       console.log('LL2 results (' + q + '):', results);
       if (results.length) return results;
@@ -261,21 +316,17 @@ const countryDataPromise = (async () => {
   return { polygons, labels };
 })();
 
-// ── Launch table ──────────────────────────────────────────────────────────────
+// ── Launch table (Kuiper only) ────────────────────────────────────────────────
 function buildLaunchTable() {
   const counts = {};
-  satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
+  kuiperData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
 
-  // YYYY-NNN sorts lexicographically = chronologically
   const sortedIds = Object.keys(counts).filter(id => id !== '—').sort();
 
   const render = ll2List => {
-    // Filter LL2 to years present in TLE data (excludes 2023 prototype which isn't in TLE)
     const tleYears = new Set(sortedIds.map(id => id.slice(0, 4)));
     const matchLL2 = ll2List.filter(l => l.date && tleYears.has(l.date.slice(0, 4)));
 
-    // Positional match: sortedIds[0] → matchLL2[0], etc.
-    // Works because both lists are chronologically ordered within the same year range.
     const rows = sortedIds.map((id, idx) => {
       const ll2    = matchLL2[idx];
       const date   = ll2?.date   || id;
@@ -291,36 +342,34 @@ function buildLaunchTable() {
     document.getElementById('lt-body').innerHTML = rows + totalRow;
   };
 
-  render([]);                          // immediate placeholder
+  render([]);
   ll2Promise.then(ll2List => render(ll2List));
 }
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
-async function fetchWithCache() {
+async function fetchWithCache(cacheKey, urls) {
   try {
-    const cached = sessionStorage.getItem(CACHE_KEY);
+    const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       const { text, ts } = JSON.parse(cached);
-      if (Date.now() - ts < CACHE_TTL_MS) { setStatus('Loading from cache…'); return text; }
+      if (Date.now() - ts < CACHE_TTL_MS) { return text; }
     }
   } catch (_) {}
 
   let lastErr;
-  for (let i = 0; i < FETCH_URLS.length; i++) {
-    setStatus(i === 0 ? 'Fetching from CelesTrak…' : i === 1 ? 'Trying proxy fallback…' : 'Trying secondary fallback…');
-    setProgress(10 + i * 15);
+  for (let i = 0; i < urls.length; i++) {
     try {
       const ctrl = new AbortController();
       const tid  = setTimeout(() => ctrl.abort(), 25000);
-      const resp = await fetch(FETCH_URLS[i], { signal: ctrl.signal });
+      const resp = await fetch(urls[i], { signal: ctrl.signal });
       clearTimeout(tid);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const text = await resp.text();
       if (!text.includes('1 ') || text.length < 100) throw new Error('Response does not look like TLE data');
-      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ text, ts: Date.now() })); } catch (_) {}
+      try { sessionStorage.setItem(cacheKey, JSON.stringify({ text, ts: Date.now() })); } catch (_) {}
       return text;
     } catch (e) {
-      console.warn('Fetch attempt', i + 1, 'failed:', e.message);
+      console.warn('Fetch attempt', i + 1, 'failed for', cacheKey, ':', e.message);
       lastErr = e;
     }
   }
@@ -328,7 +377,7 @@ async function fetchWithCache() {
 }
 
 // ── Parse TLE text ────────────────────────────────────────────────────────────
-function parseTLE(rawText) {
+function parseTLE(rawText, constellation) {
   const chunks = rawText.replace(/\r/g, '').split(/\n(?=[^12\s])/).filter(c => c.trim());
   const now    = new Date();
   const parsed = [];
@@ -344,14 +393,12 @@ function parseTLE(rawText) {
       if (!satrec || satrec.error !== 0) continue;
       if (!satellite.propagate(satrec, now)?.position) continue;
 
-      // Extract launchId from international designator in TLE line 1
-      // e.g. "24065A" → "2024-065"
-      const yr2      = line1.substring(9, 11).trim();
+      const yr2       = line1.substring(9, 11).trim();
       const launchNum = line1.substring(11, 14).trim();
-      const year     = yr2 ? (parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2) : null;
-      const launchId = year && launchNum ? `${year}-${launchNum.padStart(3, '0')}` : '—';
+      const year      = yr2 ? (parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2) : null;
+      const launchId  = year && launchNum ? `${year}-${launchNum.padStart(3, '0')}` : '—';
 
-      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launchId });
+      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launchId, constellation });
     } catch (_) {}
   }
   return parsed;
@@ -362,23 +409,39 @@ async function loadSatelliteData() {
   setStatus('Connecting to CelesTrak…');
   setProgress(5);
 
-  let rawText;
-  try {
-    rawText = await fetchWithCache();
-  } catch (e) {
-    setStatus('⚠ Network error — please refresh to retry.');
-    console.error('Could not load satellite data:', e);
-    return;
-  }
+  const [kuiperResult, starlinkResult] = await Promise.allSettled([
+    fetchWithCache(KUIPER_CACHE_KEY,   makeFetchUrls('kuiper')),
+    fetchWithCache(STARLINK_CACHE_KEY, makeFetchUrls('starlink'))
+  ]);
 
   setStatus('Parsing TLE data…');
   setProgress(42);
 
-  satData = parseTLE(rawText);
-  console.log('Valid satellites:', satData.length);
+  if (kuiperResult.status === 'fulfilled') {
+    kuiperData = parseTLE(kuiperResult.value, 'kuiper');
+    console.log('Kuiper satellites:', kuiperData.length);
+  } else {
+    console.error('Kuiper fetch failed:', kuiperResult.reason);
+  }
+
+  if (starlinkResult.status === 'fulfilled') {
+    starlinkData = parseTLE(starlinkResult.value, 'starlink');
+    console.log('Starlink satellites:', starlinkData.length);
+  } else {
+    console.error('Starlink fetch failed:', starlinkResult.reason);
+  }
+
+  if (!kuiperData.length && !starlinkData.length) {
+    setStatus('⚠ Network error — please refresh to retry.');
+    return;
+  }
+
   buildLaunchTable();
 
-  setStatus('Loaded ' + satData.length.toLocaleString() + ' satellites');
+  setStatus(
+    'Loaded ' + kuiperData.length.toLocaleString() + ' Kuiper · ' +
+    starlinkData.length.toLocaleString() + ' Starlink'
+  );
   setProgress(72);
   initGlobe();
 }
@@ -432,15 +495,33 @@ function initFallback2D() {
     ctx.strokeStyle = 'rgba(201,168,76,0.25)';
     ctx.lineWidth = 0.5;
     countryFeatures.forEach(drawGeo);
-    satData.forEach(d => {
-      if (isNaN(d.lat)) return;
-      const [x, y] = project(d.lng, d.lat);
-      ctx.fillStyle = '#cc00ff';
-      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
-    });
+
+    if (showKuiper) {
+      ctx.shadowColor = 'rgba(204,0,255,0.6)';
+      ctx.shadowBlur  = 4;
+      ctx.fillStyle   = '#cc00ff';
+      kuiperData.forEach(d => {
+        if (isNaN(d.lat)) return;
+        const [x, y] = project(d.lng, d.lat);
+        ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      });
+    }
+
+    if (showStarlink) {
+      ctx.shadowColor = 'rgba(220,220,255,0.5)';
+      ctx.shadowBlur  = 4;
+      ctx.fillStyle   = '#e8e8ff';
+      starlinkData.forEach(d => {
+        if (isNaN(d.lat)) return;
+        const [x, y] = project(d.lng, d.lat);
+        ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      });
+    }
+
+    ctx.shadowBlur = 0;
   }
 
-  countBadge.textContent = satData.length.toLocaleString() + ' satellites tracked';
+  updateCountBadge();
   setProgress(94);
   setStatus('Starting…');
   setTimeout(() => {
@@ -465,20 +546,19 @@ function initGlobe() {
     .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-dark.jpg')
     .atmosphereColor('#8750ff')
     .backgroundColor('rgba(14,14,14,1)')
-    .htmlElementsData(satData)
+    .htmlElementsData(visibleData())
     .htmlLat('lat')
     .htmlLng('lng')
     .htmlAltitude('alt')
-    .htmlElement(() => {
+    .htmlElement(d => {
       const el = document.createElement('div');
-      el.innerHTML = '🛰️';
-      el.style.cssText = 'font-size:11px;line-height:1;user-select:none;pointer-events:none;';
+      el.className = `sat-dot ${d.constellation}`;
       return el;
     });
 
   setTimeout(() => globe.pointOfView({ altitude: 3.5 }));
 
-  countBadge.textContent = satData.length.toLocaleString() + ' satellites tracked';
+  updateCountBadge();
   window.addEventListener('resize', () => globe.width(window.innerWidth).height(window.innerHeight));
 
   countryDataPromise.then(({ polygons, labels }) => {
@@ -507,7 +587,7 @@ function initGlobe() {
 function updatePositions() {
   const now  = new Date();
   const gmst = satellite.gstime(now);
-  satData.forEach(d => {
+  [...kuiperData, ...starlinkData].forEach(d => {
     const eci = satellite.propagate(d.satrec, now);
     if (eci?.position) {
       const geo = satellite.eciToGeodetic(eci.position, gmst);
@@ -515,9 +595,6 @@ function updatePositions() {
       d.lng   = satellite.radiansToDegrees(geo.longitude);
       d.alt   = geo.height / EARTH_RADIUS_KM;
       d.altKm = Math.round(geo.height);
-      const cls = classifyOrbit(geo.height);
-      d.band  = cls.band;
-      d.color = cls.color;
     } else {
       d.lat = NaN;
     }
@@ -531,6 +608,21 @@ function startAnimationLoop() {
     updatePositions();
   })();
 }
+
+// ── Toggle buttons ────────────────────────────────────────────────────────────
+document.getElementById('toggle-kuiper').addEventListener('click', () => {
+  showKuiper = !showKuiper;
+  document.getElementById('toggle-kuiper').classList.toggle('active', showKuiper);
+  updateGlobeData();
+  updateCountBadge();
+});
+
+document.getElementById('toggle-starlink').addEventListener('click', () => {
+  showStarlink = !showStarlink;
+  document.getElementById('toggle-starlink').classList.toggle('active', showStarlink);
+  updateGlobeData();
+  updateCountBadge();
+});
 
 loadSatelliteData();
 </script>
