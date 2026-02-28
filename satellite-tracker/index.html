@@ -146,6 +146,7 @@
 // ═══════════════════════════════════════════════════════
 
 import * as satellite from 'https://esm.sh/satellite.js';
+import { feature as topoFeature } from 'https://esm.sh/topojson-client';
 
 const EARTH_RADIUS_KM = 6371;
 const CACHE_KEY = 'satTracker_kuiper_v1';
@@ -187,6 +188,20 @@ function dismissOverlay() {
 // ── State ────────────────────────────────────────────────────────────────────
 let globe;
 let satData = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
+
+// ── Country data — fetched in parallel with satellite data ────────────────────
+const countryDataPromise = (async () => {
+  const [topoResp, countriesResp] = await Promise.all([
+    fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'),
+    fetch('https://restcountries.com/v3.1/all?fields=name,latlng,area')
+  ]);
+  const [topoData, countryInfo] = await Promise.all([topoResp.json(), countriesResp.json()]);
+  const polygons = topoFeature(topoData, topoData.objects.countries);
+  const labels = countryInfo
+    .filter(c => c.area > 100000 && c.latlng?.length === 2)
+    .map(c => ({ lat: c.latlng[0], lng: c.latlng[1], text: c.name.common }));
+  return { polygons, labels };
+})();
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
 async function fetchWithCache() {
@@ -283,7 +298,7 @@ function initGlobe() {
   updatePositions();
 
   globe = new Globe(document.getElementById('globe-container'))
-    .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg')
+    .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-dark.jpg')
     .atmosphereColor('#8750ff')
     .backgroundColor('rgba(14,14,14,1)')
     .htmlElementsData(satData)
@@ -304,6 +319,23 @@ function initGlobe() {
 
   countBadge.textContent = satData.length.toLocaleString() + ' satellites tracked';
   window.addEventListener('resize', () => globe.width(window.innerWidth).height(window.innerHeight));
+
+  // Apply country borders + labels once data is ready (non-blocking)
+  countryDataPromise.then(({ polygons, labels }) => {
+    globe
+      .polygonsData(polygons.features)
+      .polygonCapColor(() => 'rgba(0,0,0,0)')
+      .polygonSideColor(() => 'rgba(0,0,0,0)')
+      .polygonStrokeColor(() => 'rgba(201,168,76,0.35)')
+      .labelsData(labels)
+      .labelLat('lat')
+      .labelLng('lng')
+      .labelText('text')
+      .labelSize(0.45)
+      .labelDotRadius(0)
+      .labelColor(() => 'rgba(255,255,255,0.45)')
+      .labelResolution(2);
+  }).catch(e => console.warn('Country overlay failed:', e));
 
   setProgress(94);
   setStatus('Starting…');
