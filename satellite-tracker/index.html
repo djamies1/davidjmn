@@ -114,6 +114,31 @@
   .toggle-btn.kuiper .dot   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.5); }
   .toggle-btn.starlink .dot { background: #00d4ff; box-shadow: 0 0 5px 2px rgba(0,212,255,0.5); border-radius: 0; }
   .toggle-btn:not(.active) .dot { opacity: 0.25; box-shadow: none; }
+  /* Coverage toggle — ring-shaped indicator */
+  .toggle-btn.coverage.active { border-color: rgba(204,0,255,0.3); color: rgba(255,255,255,0.85); }
+  .toggle-btn.coverage .dot {
+    background: transparent; border: 1.5px solid #cc00ff;
+    box-shadow: 0 0 4px 1px rgba(204,0,255,0.4); border-radius: 50%;
+  }
+
+  /* ── FCC Milestone panel — fixed bottom-right ── */
+  #milestone-panel {
+    position: fixed; bottom: 1.75rem; right: 1.75rem;
+    background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
+    border-radius: 6px; padding: 0.75rem 1rem;
+    z-index: 100; min-width: 245px;
+    backdrop-filter: blur(12px);
+    opacity: 0; transition: opacity 0.5s ease;
+  }
+  #milestone-panel.visible { opacity: 1; }
+  .ms-title { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); margin-bottom: 0.65rem; }
+  .ms-row { margin-bottom: 0.6rem; }
+  .ms-row:last-child { margin-bottom: 0; }
+  .ms-label { display: flex; justify-content: space-between; font-size: 0.65rem; font-family: monospace; color: rgba(255,255,255,0.4); margin-bottom: 0.25rem; }
+  .ms-label .ms-count { color: rgba(255,255,255,0.75); }
+  .ms-bar-wrap { height: 2px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; margin-bottom: 0.2rem; }
+  .ms-bar { height: 100%; background: var(--gold); border-radius: 2px; transition: width 0.6s ease; }
+  .ms-deadline { font-size: 0.58rem; color: rgba(255,255,255,0.28); }
 
   /* ── Launch table ── */
   #launch-table {
@@ -162,6 +187,7 @@
   @media (max-width: 600px) {
     .header-center { display: none; }
     #launch-table { display: none; }
+    #milestone-panel { display: none; }
   }
 </style>
 </head>
@@ -195,6 +221,13 @@
 <div id="toggle-panel">
   <button id="toggle-kuiper"   class="toggle-btn kuiper active"><span class="dot"></span>Kuiper</button>
   <button id="toggle-starlink" class="toggle-btn starlink active"><span class="dot"></span>Starlink</button>
+  <button id="toggle-coverage" class="toggle-btn coverage active"><span class="dot"></span>Footprints</button>
+</div>
+
+<!-- FCC milestone tracker -->
+<div id="milestone-panel">
+  <div class="ms-title">FCC Milestones — Kuiper</div>
+  <div id="ms-rows"></div>
 </div>
 
 <!-- Launch table -->
@@ -218,6 +251,13 @@ const EARTH_RADIUS_KM    = 6371;
 const KUIPER_CACHE_KEY   = 'satTracker_kuiper_v2';
 const STARLINK_CACHE_KEY = 'satTracker_starlink_v2';
 const CACHE_TTL_MS       = 15 * 60 * 1000;
+// Coverage footprint: ~600 km altitude, 25° minimum elevation angle → 9.1° Earth central angle
+const COVERAGE_RADIUS_DEG = 9.1;
+const FCC_MILESTONES = [
+  { label: 'Phase 1', target:  578, deadline: new Date('2026-07-30'), deadlineStr: 'Jul 2026' },
+  { label: 'Phase 2', target: 1156, deadline: new Date('2027-07-30'), deadlineStr: 'Jul 2027' },
+  { label: 'Full',    target: 3236, deadline: new Date('2029-07-30'), deadlineStr: 'Jul 2029' },
+];
 
 function makeFetchUrls(group) {
   const base = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=TLE`;
@@ -244,6 +284,7 @@ function dismissOverlay() {
   countBadge.classList.add('visible');
   document.getElementById('launch-table').classList.add('visible');
   document.getElementById('toggle-panel').classList.add('visible');
+  document.getElementById('milestone-panel').classList.add('visible');
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -252,6 +293,8 @@ let kuiperData   = [];
 let starlinkData = [];
 let showKuiper   = true;
 let showStarlink = true;
+let showCoverage = true;
+let countriesCache = null;
 
 function visibleData() {
   return [...(showKuiper ? kuiperData : []), ...(showStarlink ? starlinkData : [])];
@@ -272,6 +315,61 @@ function updateCountBadge() {
   } else {
     countBadge.textContent = parts.join(' · ') + ' satellites tracked';
   }
+}
+
+// ── Coverage footprint helpers ────────────────────────────────────────────────
+// Generates a GeoJSON polygon circle using proper spherical geometry
+function coverageCircle(lat, lng, radiusDeg = COVERAGE_RADIUS_DEG, n = 32) {
+  const D2R = Math.PI / 180;
+  const R2D = 180 / Math.PI;
+  const angDist = radiusDeg * D2R;
+  const lat1 = lat * D2R;
+  const lng1 = lng * D2R;
+  const coords = [];
+  for (let i = 0; i < n; i++) {
+    const bearing = (2 * Math.PI * i) / n;
+    const lat2 = Math.asin(
+      Math.sin(lat1) * Math.cos(angDist) +
+      Math.cos(lat1) * Math.sin(angDist) * Math.cos(bearing)
+    );
+    const lng2 = lng1 + Math.atan2(
+      Math.sin(bearing) * Math.sin(angDist) * Math.cos(lat1),
+      Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    coords.push([lng2 * R2D, lat2 * R2D]);
+  }
+  coords.push(coords[0]); // close ring
+  return { type: 'Feature', properties: { type: 'coverage' }, geometry: { type: 'Polygon', coordinates: [coords] } };
+}
+
+function updateCoveragePolygons() {
+  if (!globe || !countriesCache) return;
+  const circles = (showCoverage && showKuiper)
+    ? kuiperData.filter(d => !isNaN(d.lat)).map(d => coverageCircle(d.lat, d.lng))
+    : [];
+  globe.polygonsData([...countriesCache.features, ...circles]);
+}
+
+// ── FCC milestone tracker ─────────────────────────────────────────────────────
+function updateMilestonePanel() {
+  const count = kuiperData.length;
+  const today = new Date();
+  const html = FCC_MILESTONES.map(m => {
+    const pct      = Math.min(100, (count / m.target) * 100).toFixed(1);
+    const daysLeft = Math.ceil((m.deadline - today) / 86400000);
+    const daysStr  = daysLeft > 0
+      ? daysLeft.toLocaleString() + ' days remaining'
+      : 'Deadline passed';
+    return `<div class="ms-row">
+      <div class="ms-label">
+        <span>${m.label} — ${m.deadlineStr}</span>
+        <span class="ms-count">${count.toLocaleString()} / ${m.target.toLocaleString()}</span>
+      </div>
+      <div class="ms-bar-wrap"><div class="ms-bar" style="width:${pct}%"></div></div>
+      <div class="ms-deadline">${daysStr}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('ms-rows').innerHTML = html;
 }
 
 // ── Launch metadata ───────────────────────────────────────────────────────────
@@ -437,6 +535,7 @@ async function loadSatelliteData() {
   }
 
   buildLaunchTable();
+  updateMilestonePanel();
 
   setStatus(
     'Loaded ' + kuiperData.length.toLocaleString() + ' Kuiper · ' +
@@ -562,11 +661,12 @@ function initGlobe() {
   window.addEventListener('resize', () => globe.width(window.innerWidth).height(window.innerHeight));
 
   countryDataPromise.then(({ polygons, labels }) => {
+    countriesCache = polygons;
     globe
-      .polygonsData(polygons.features)
-      .polygonCapColor(() => 'rgba(0,0,0,0)')
+      .polygonCapColor(f => f.properties?.type === 'coverage' ? 'rgba(204,0,255,0.05)' : 'rgba(0,0,0,0)')
       .polygonSideColor(() => 'rgba(0,0,0,0)')
-      .polygonStrokeColor(() => 'rgba(201,168,76,0.35)')
+      .polygonStrokeColor(f => f.properties?.type === 'coverage' ? 'rgba(204,0,255,0.22)' : 'rgba(201,168,76,0.35)')
+      .polygonAltitude(f => f.properties?.type === 'coverage' ? 0 : 0.001)
       .labelsData(labels)
       .labelLat('lat')
       .labelLng('lng')
@@ -576,6 +676,8 @@ function initGlobe() {
       .labelDotRadius(0)
       .labelColor(() => 'rgba(180,180,180,0.6)')
       .labelResolution(3);
+    updateCoveragePolygons();
+    setInterval(updateCoveragePolygons, 15000);
   }).catch(e => console.warn('Country overlay failed:', e));
 
   setProgress(94);
@@ -615,6 +717,7 @@ document.getElementById('toggle-kuiper').addEventListener('click', () => {
   document.getElementById('toggle-kuiper').classList.toggle('active', showKuiper);
   updateGlobeData();
   updateCountBadge();
+  updateCoveragePolygons();
 });
 
 document.getElementById('toggle-starlink').addEventListener('click', () => {
@@ -622,6 +725,12 @@ document.getElementById('toggle-starlink').addEventListener('click', () => {
   document.getElementById('toggle-starlink').classList.toggle('active', showStarlink);
   updateGlobeData();
   updateCountBadge();
+});
+
+document.getElementById('toggle-coverage').addEventListener('click', () => {
+  showCoverage = !showCoverage;
+  document.getElementById('toggle-coverage').classList.toggle('active', showCoverage);
+  updateCoveragePolygons();
 });
 
 loadSatelliteData();
