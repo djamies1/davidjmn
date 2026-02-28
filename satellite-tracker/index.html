@@ -204,39 +204,46 @@ let globe;
 let satData = [];
 
 // ── Launch metadata — two non-blocking parallel fetches ───────────────────────
-// 1. CelesTrak JSON for launch dates (launchId → date)
-const launchDatesPromise = fetch(
-  'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON'
-).then(r => r.json()).then(records => {
-  const map = {};
-  for (const rec of records) {
-    const m = (rec.OBJECT_ID || '').match(/^(\d{4})-(\d+)/);
-    if (m && rec.LAUNCH_DATE) map[`${m[1]}-${m[2].padStart(3, '0')}`] = rec.LAUNCH_DATE;
+// 1. CelesTrak JSON for launch dates (launchId → date), with proxy fallbacks
+const CELESTRAK_JSON_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON';
+const launchDatesPromise = (async () => {
+  const urls = [
+    CELESTRAK_JSON_URL,
+    'https://corsproxy.io/?' + CELESTRAK_JSON_URL,
+    'https://api.allorigins.win/raw?url=' + encodeURIComponent(CELESTRAK_JSON_URL),
+  ];
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const records = await resp.json();
+      if (!Array.isArray(records) || !records.length) continue;
+      const map = {};
+      for (const rec of records) {
+        const m = (rec.OBJECT_ID || '').match(/^(\d{4})-(\d+)/);
+        const date = rec.LAUNCH_DATE || rec.LAUNCH || null; // handle field name variants
+        if (m && date) map[`${m[1]}-${m[2].padStart(3, '0')}`] = date;
+      }
+      if (Object.keys(map).length) return map;
+    } catch (_) {}
   }
-  return map;
-}).catch(() => ({}));
+  return {};
+})();
 
-// 2. Launch Library 2 for rocket names (date → rocket)
-const rocketNamesPromise = fetch(
-  'https://ll.thespacedevs.com/2.2.0/launch/?search=kuiper&limit=50&format=json'
-).then(r => r.json()).then(data => {
-  const map = {};
-  for (const launch of data.results || []) {
-    const date = (launch.net || '').slice(0, 10);
-    if (date) map[date] = launch.rocket?.configuration?.name || '—';
-  }
-  return map;
-}).catch(() => ({}));
-
-// Combined: launchId → { date, rocket }
-const launchMetaPromise = Promise.all([launchDatesPromise, rocketNamesPromise])
-  .then(([dateMap, rocketMap]) => {
-    const combined = {};
-    for (const [id, date] of Object.entries(dateMap)) {
-      combined[id] = { date, rocket: rocketMap[date] || '—' };
-    }
-    return combined;
-  }).catch(() => ({}));
+// 2. Launch Library 2 — sorted list of Kuiper launches with date + rocket
+const ll2Promise = fetch(
+  'https://ll.thespacedevs.com/2.2.0/launch/?search=kuiper&limit=50&ordering=net'
+).then(r => {
+  if (!r.ok) throw new Error('LL2 ' + r.status);
+  return r.json();
+}).then(data =>
+  (data.results || [])
+    .sort((a, b) => (a.net || '').localeCompare(b.net))
+    .map(l => ({
+      date:   (l.net || '').slice(0, 10),
+      rocket: l.rocket?.configuration?.name || '—',
+    }))
+).catch(() => []);
 
 // ── Country data ──────────────────────────────────────────────────────────────
 const countryDataPromise = (async () => {
@@ -257,24 +264,32 @@ function buildLaunchTable() {
   const counts = {};
   satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
 
-  const render = meta => {
-    const rows = Object.entries(counts)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([id, count]) => {
-        const info   = meta[id] || {};
-        const date   = info.date   || id;   // fall back to launchId if date unavailable
-        const rocket = info.rocket || '—';
-        return `<div class="lt-row">
-          <span>${date}</span>
-          <span class="lt-rocket">${rocket}</span>
-          <span>${count}</span>
-        </div>`;
-      }).join('');
+  // Sort chronologically (YYYY-NNN format sorts correctly as strings)
+  const sortedIds = Object.keys(counts).filter(id => id !== '—').sort();
+
+  const render = (datesMap, ll2List) => {
+    const rows = sortedIds.map((id, idx) => {
+      const count = counts[id];
+      // datesMap: launchId → "YYYY-MM-DD" from CelesTrak JSON
+      const ctDate = datesMap[id] || null;
+      // Primary match: find LL2 entry whose date matches CelesTrak date
+      // Fallback: positional match (both lists are chronologically ordered)
+      const ll2 = ctDate
+        ? ll2List.find(l => l.date === ctDate) || ll2List[idx]
+        : ll2List[idx];
+      const displayDate = ctDate || ll2?.date || id;
+      const rocket      = ll2?.rocket || '—';
+      return `<div class="lt-row">
+        <span>${displayDate}</span>
+        <span class="lt-rocket">${rocket}</span>
+        <span>${count}</span>
+      </div>`;
+    }).join('');
     document.getElementById('lt-body').innerHTML = rows;
   };
 
-  render({});                       // immediate: shows launchId as placeholder date
-  launchMetaPromise.then(render);   // re-renders with actual date + rocket when ready
+  render({}, []);   // immediate placeholder (shows launchIds while fetches resolve)
+  Promise.all([launchDatesPromise, ll2Promise]).then(([datesMap, ll2List]) => render(datesMap, ll2List));
 }
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
