@@ -86,7 +86,7 @@
     pointer-events: none; user-select: none;
   }
   .sat-dot.kuiper   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.45); }
-  .sat-dot.starlink { background: #e8e8ff; box-shadow: 0 0 5px 2px rgba(220,220,255,0.4); }
+  .sat-dot.starlink { background: #00d4ff; box-shadow: 0 0 5px 2px rgba(0,212,255,0.45); border-radius: 0; }
 
   /* ── Toggle panel — fixed top-right ── */
   #toggle-panel {
@@ -106,13 +106,13 @@
     transition: border-color 0.2s, color 0.2s; outline: none;
   }
   .toggle-btn.kuiper.active   { border-color: rgba(204,0,255,0.4);   color: rgba(255,255,255,0.85); }
-  .toggle-btn.starlink.active { border-color: rgba(220,220,255,0.35); color: rgba(255,255,255,0.85); }
+  .toggle-btn.starlink.active { border-color: rgba(0,212,255,0.4);    color: rgba(255,255,255,0.85); }
   .toggle-btn .dot {
     width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
     transition: opacity 0.2s, box-shadow 0.2s;
   }
   .toggle-btn.kuiper .dot   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.5); }
-  .toggle-btn.starlink .dot { background: #e8e8ff; box-shadow: 0 0 5px 2px rgba(220,220,255,0.45); }
+  .toggle-btn.starlink .dot { background: #00d4ff; box-shadow: 0 0 5px 2px rgba(0,212,255,0.5); border-radius: 0; }
   .toggle-btn:not(.active) .dot { opacity: 0.25; box-shadow: none; }
 
   /* ── Launch table ── */
@@ -508,9 +508,9 @@ function initFallback2D() {
     }
 
     if (showStarlink) {
-      ctx.shadowColor = 'rgba(220,220,255,0.5)';
+      ctx.shadowColor = 'rgba(0,212,255,0.6)';
       ctx.shadowBlur  = 4;
-      ctx.fillStyle   = '#e8e8ff';
+      ctx.fillStyle   = '#00d4ff';
       starlinkData.forEach(d => {
         if (isNaN(d.lat)) return;
         const [x, y] = project(d.lng, d.lat);
