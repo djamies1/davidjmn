@@ -80,6 +80,28 @@
   }
   #count-badge.visible { opacity: 1; }
 
+  /* ── Launch table ── */
+  #launch-table {
+    position: fixed; top: 5.5rem; left: 1.75rem;
+    background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
+    border-radius: 6px; padding: 0.75rem 1rem;
+    z-index: 100; min-width: 170px;
+    backdrop-filter: blur(12px);
+    max-height: calc(100vh - 8rem); overflow-y: auto;
+    opacity: 0; transition: opacity 0.5s ease;
+  }
+  #launch-table.visible { opacity: 1; }
+  .lt-title {
+    font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 0.5rem;
+  }
+  .lt-row {
+    display: flex; justify-content: space-between; gap: 1.5rem;
+    font-size: 0.67rem; font-family: monospace;
+    color: rgba(255,255,255,0.45); padding: 0.12rem 0;
+  }
+  .lt-row span:last-child { color: var(--gold-light); }
+
   /* ── Mobile tweaks ── */
   @media (max-width: 600px) {
     .header-center { display: none; }
@@ -111,6 +133,12 @@
 
 <!-- Count badge -->
 <div id="count-badge">Loading…</div>
+
+<!-- Launch table -->
+<div id="launch-table">
+  <div class="lt-title">Launches</div>
+  <div id="lt-body"></div>
+</div>
 
 <!-- ── Libraries ── -->
 <script src="https://cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -156,6 +184,17 @@ function dismissOverlay() {
   overlay.classList.add('fade-out');
   setTimeout(() => { overlay.style.display = 'none'; }, 750);
   countBadge.classList.add('visible');
+  document.getElementById('launch-table').classList.add('visible');
+}
+
+function buildLaunchTable() {
+  const counts = {};
+  satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
+  const rows = Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, n]) => `<div class="lt-row"><span>${id}</span><span>${n}</span></div>`)
+    .join('');
+  document.getElementById('lt-body').innerHTML = rows;
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -228,10 +267,13 @@ function parseTLE(rawText) {
       if (!satrec || satrec.error !== 0) continue;
       if (!satellite.propagate(satrec, now)?.position) continue;
 
-      const yr2    = line1.substring(9, 11).trim();
-      const launch = yr2 ? String((parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2)) : '—';
+      const yr2      = line1.substring(9, 11).trim();
+      const launchNum = line1.substring(11, 14).trim();
+      const year     = yr2 ? (parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2) : null;
+      const launch   = year ? String(year) : '—';
+      const launchId = year && launchNum ? `${year}-${launchNum.padStart(3, '0')}` : '—';
 
-      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launch });
+      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launch, launchId });
     } catch (_) {}
   }
   return parsed;
@@ -256,6 +298,7 @@ async function loadSatelliteData() {
 
   satData = parseTLE(rawText);
   console.log('Valid satellites:', satData.length);
+  buildLaunchTable();
 
   setStatus('Loaded ' + satData.length.toLocaleString() + ' satellites');
   setProgress(72);
@@ -302,8 +345,8 @@ function initGlobe() {
       .labelText('text')
       .labelAltitude(0.01)
       .labelSize(0.6)
-      .labelDotRadius(0.3)
-      .labelColor(() => 'rgba(255,255,255,0.7)')
+      .labelDotRadius(0)
+      .labelColor(() => 'rgba(180,180,180,0.6)')
       .labelResolution(3);
   }).catch(e => console.warn('Country overlay failed:', e));
 
