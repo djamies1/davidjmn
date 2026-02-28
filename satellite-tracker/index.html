@@ -203,64 +203,15 @@ function dismissOverlay() {
 let globe;
 let satData = [];
 
-// ── Launch metadata — two non-blocking parallel fetches ───────────────────────
-// 1. CelesTrak JSON for launch dates (launchId → date), with proxy fallbacks.
-//    Tries LAUNCH_DATE field first; falls back to earliest EPOCH per launch group
-//    (EPOCH is always present in OMM JSON and is a good proxy for launch date).
-const CELESTRAK_JSON_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON';
-const launchDatesPromise = (async () => {
-  const urls = [
-    CELESTRAK_JSON_URL,
-    'https://corsproxy.io/?' + CELESTRAK_JSON_URL,
-    'https://api.allorigins.win/raw?url=' + encodeURIComponent(CELESTRAK_JSON_URL),
-  ];
-  for (let i = 0; i < urls.length; i++) {
-    try {
-      const ctrl = new AbortController();
-      const tid  = setTimeout(() => ctrl.abort(), 15000);
-      const resp = await fetch(urls[i], { signal: ctrl.signal });
-      clearTimeout(tid);
-      if (!resp.ok) { console.warn('launchDates[' + i + '] HTTP ' + resp.status); continue; }
-      const records = await resp.json();
-      console.log('launchDates: got', records.length, 'records (URL index ' + i + ')');
-      if (!Array.isArray(records) || !records.length) continue;
-
-      // Group records by launchId
-      const groups = {};
-      for (const rec of records) {
-        const m = (rec.OBJECT_ID || '').match(/^(\d{4})-(\d+)/);
-        if (!m) continue;
-        const id = `${m[1]}-${m[2].padStart(3, '0')}`;
-        (groups[id] = groups[id] || []).push(rec);
-      }
-
-      const map = {};
-      for (const [id, recs] of Object.entries(groups)) {
-        // Prefer explicit LAUNCH_DATE; fall back to earliest EPOCH in the group
-        const explicit = recs[0].LAUNCH_DATE || recs[0].LAUNCH || null;
-        if (explicit) {
-          map[id] = explicit.slice(0, 10);
-        } else {
-          const earliest = recs
-            .map(r => r.EPOCH ? new Date(r.EPOCH) : null)
-            .filter(Boolean)
-            .sort((a, b) => a - b)[0];
-          if (earliest) map[id] = earliest.toISOString().slice(0, 10);
-        }
-      }
-      console.log('launchDates map:', map);
-      if (Object.keys(map).length) return map;
-    } catch (e) {
-      console.warn('launchDates[' + i + '] error:', e.message);
-    }
-  }
-  return {};
-})();
-
-// 2. Launch Library 2 — sorted list of Kuiper launches with date + rocket.
-//    Tries "amazon kuiper" first (more specific), falls back to "kuiper".
+// ── Launch metadata ───────────────────────────────────────────────────────────
+// CelesTrak JSON has no LAUNCH_DATE field — only orbital elements.
+// Launch Library 2 is the sole source of dates + rocket names.
+// Mission names in LL2 are "Amazon Leo (KA-01)" etc., so we search "amazon leo".
+// We filter out future placeholder entries (net date > today) so they don't
+// contaminate positional matching against the 8 confirmed TLE launch batches.
 const ll2Promise = (async () => {
-  const searches = ['amazon+kuiper', 'kuiper'];
+  const today = new Date().toISOString().slice(0, 10);
+  const searches = ['amazon+leo', 'atlas+v+amazon'];
   for (const q of searches) {
     try {
       const ctrl = new AbortController();
@@ -273,8 +224,8 @@ const ll2Promise = (async () => {
       if (!r.ok) { console.warn('LL2 HTTP', r.status, 'for', q); continue; }
       const data = await r.json();
       const results = (data.results || [])
-        .map(l => ({ date: (l.net || '').slice(0, 10), rocket: l.rocket?.configuration?.name || '—' }))
-        .filter(l => l.date)
+        .map(l => ({ date: (l.net || '').slice(0, 10), rocket: l.rocket?.configuration?.name || '—', name: l.name || '' }))
+        .filter(l => l.date && l.date <= today)   // exclude future placeholders
         .sort((a, b) => a.date.localeCompare(b.date));
       console.log('LL2 results (' + q + '):', results);
       if (results.length) return results;
@@ -304,36 +255,31 @@ function buildLaunchTable() {
   const counts = {};
   satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
 
-  // Sort chronologically (YYYY-NNN format sorts correctly as strings)
+  // YYYY-NNN sorts lexicographically = chronologically
   const sortedIds = Object.keys(counts).filter(id => id !== '—').sort();
 
-  const render = (datesMap, ll2List) => {
-    // Only consider LL2 entries from years that actually appear in TLE data.
-    // This prevents the 2023 prototype launch from contaminating positional
-    // matching when production batches only start in 2024/2025.
+  const render = ll2List => {
+    // Filter LL2 to years present in TLE data (excludes 2023 prototype which isn't in TLE)
     const tleYears = new Set(sortedIds.map(id => id.slice(0, 4)));
-    const matchLL2  = ll2List.filter(l => l.date && tleYears.has(l.date.slice(0, 4)));
+    const matchLL2 = ll2List.filter(l => l.date && tleYears.has(l.date.slice(0, 4)));
 
+    // Positional match: sortedIds[0] → matchLL2[0], etc.
+    // Works because both lists are chronologically ordered within the same year range.
     const rows = sortedIds.map((id, idx) => {
-      const count  = counts[id];
-      const ctDate = datesMap[id] || null;  // "YYYY-MM-DD" from CelesTrak (or EPOCH fallback)
-      // Primary: exact date match in LL2; Fallback: positional within year-filtered LL2
-      const ll2  = ctDate
-        ? matchLL2.find(l => l.date === ctDate) || matchLL2[idx]
-        : matchLL2[idx];
-      const displayDate = ctDate || ll2?.date || id;
-      const rocket      = ll2?.rocket || '—';
+      const ll2    = matchLL2[idx];
+      const date   = ll2?.date   || id;
+      const rocket = ll2?.rocket || '—';
       return `<div class="lt-row">
-        <span>${displayDate}</span>
+        <span>${date}</span>
         <span class="lt-rocket">${rocket}</span>
-        <span>${count}</span>
+        <span>${counts[id]}</span>
       </div>`;
     }).join('');
     document.getElementById('lt-body').innerHTML = rows;
   };
 
-  render({}, []);   // immediate placeholder (shows launchIds while fetches resolve)
-  Promise.all([launchDatesPromise, ll2Promise]).then(([datesMap, ll2List]) => render(datesMap, ll2List));
+  render([]);                          // immediate placeholder
+  ll2Promise.then(ll2List => render(ll2List));
 }
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
