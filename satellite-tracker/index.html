@@ -294,26 +294,19 @@ function initGlobe() {
   setStatus('Initialising globe…');
   setProgress(84);
 
-  // Compute initial positions before rendering
-  updatePositions();
-
   globe = new Globe(document.getElementById('globe-container'))
     .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-dark.jpg')
     .atmosphereColor('#8750ff')
     .backgroundColor('rgba(14,14,14,1)')
-    .htmlElementsData(satData)
-    .htmlLat('lat')
-    .htmlLng('lng')
-    .htmlAltitude('alt')
-    .htmlElement(d => {
-      const el = document.createElement('div');
-      el.innerHTML = '🛰️';
-      el.style.cssText = 'font-size:11px;line-height:1;cursor:pointer;user-select:none;';
-      el.addEventListener('mouseover', () => onSatHover(d));
-      el.addEventListener('mouseout',  () => onSatHover(null));
-      el.addEventListener('click',     () => onSatClick(d));
-      return el;
-    });
+    .pointsData(satData)
+    .pointLat('lat')
+    .pointLng('lng')
+    .pointAltitude('alt')
+    .pointColor(() => '#cc00ff')
+    .pointRadius(0.3)
+    .pointResolution(6)
+    .onPointHover(d => onSatHover(d))
+    .onPointClick(d => onSatClick(d));
 
   setTimeout(() => globe.pointOfView({ altitude: 3.5 }));
 
@@ -331,10 +324,10 @@ function initGlobe() {
       .labelLat('lat')
       .labelLng('lng')
       .labelText('text')
-      .labelSize(0.45)
-      .labelDotRadius(0)
-      .labelColor(() => 'rgba(255,255,255,0.45)')
-      .labelResolution(2);
+      .labelSize(1.2)
+      .labelDotRadius(0.4)
+      .labelColor(() => 'rgba(255,255,255,0.7)')
+      .labelResolution(3);
   }).catch(e => console.warn('Country overlay failed:', e));
 
   setProgress(94);
@@ -363,12 +356,14 @@ function updatePositions() {
   });
 }
 
-// ── Animation loop — updates positions, globe.gl repositions elements itself ──
+// ── Animation loop — update positions and refresh globe point data ────────────
 function startAnimationLoop() {
-  (function frame() {
-    requestAnimationFrame(frame);
+  function tick() {
     updatePositions();
-  })();
+    if (globe) globe.pointsData(satData);
+  }
+  tick();
+  setInterval(tick, 1000);
 }
 
 // ── Hover handler ─────────────────────────────────────────────────────────────
