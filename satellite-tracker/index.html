@@ -61,8 +61,6 @@
     background: linear-gradient(to bottom, rgba(14,14,14,0.82) 0%, transparent 100%);
     pointer-events: none;
   }
-  #header a, #header button { pointer-events: auto; }
-
 
   .header-center {
     position: absolute; left: 50%; transform: translateX(-50%); text-align: center;
@@ -82,55 +80,6 @@
   }
   #count-badge.visible { opacity: 1; }
 
-  /* ── Controls panel ── */
-  #controls {
-    position: fixed; bottom: 2rem; left: 1.75rem;
-    background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
-    border-radius: 6px; padding: 1rem 1.2rem;
-    z-index: 100; min-width: 210px;
-    backdrop-filter: blur(12px);
-    opacity: 0; transition: opacity 0.5s ease;
-  }
-  #controls.visible { opacity: 1; }
-
-  .ctrl-row { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.8rem; }
-  .ctrl-row:last-child { margin-bottom: 0; }
-
-  #play-btn {
-    width: 30px; height: 30px; border-radius: 50%;
-    border: 1px solid var(--gold-border); background: var(--gold-dim);
-    color: var(--gold); font-size: 0.7rem; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.2s; flex-shrink: 0;
-    line-height: 1;
-  }
-  #play-btn:hover { background: rgba(201,168,76,0.28); }
-
-  #utc-time { font-size: 0.67rem; color: rgba(255,255,255,0.45); font-family: monospace; letter-spacing: 0.04em; }
-
-  .speed-label { font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(255,255,255,0.32); flex-shrink: 0; }
-  #speed-val { font-size: 0.7rem; color: var(--gold); min-width: 34px; text-align: right; flex-shrink: 0; }
-
-  #speed-slider {
-    -webkit-appearance: none; appearance: none;
-    width: 100%; height: 2px; border-radius: 2px;
-    background: rgba(255,255,255,0.12); outline: none; cursor: pointer;
-  }
-  #speed-slider::-webkit-slider-thumb {
-    -webkit-appearance: none; width: 11px; height: 11px; border-radius: 50%;
-    background: var(--gold); cursor: pointer;
-  }
-  #speed-slider::-moz-range-thumb {
-    width: 11px; height: 11px; border-radius: 50%; background: var(--gold);
-    cursor: pointer; border: none;
-  }
-
-  /* ── Orbit legend ── */
-  .legend { margin-top: 0.7rem; padding-top: 0.7rem; border-top: 1px solid rgba(255,255,255,0.07); display: flex; flex-direction: column; gap: 0.3rem; }
-  .legend-item { display: flex; align-items: center; gap: 0.45rem; font-size: 0.65rem; color: rgba(255,255,255,0.48); }
-  .legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .legend-range { color: rgba(255,255,255,0.22); font-size: 0.6rem; margin-left: auto; }
-
   /* ── Satellite tooltip ── */
   #tooltip {
     position: fixed; top: 78px; right: 1.75rem;
@@ -149,7 +98,6 @@
 
   /* ── Mobile tweaks ── */
   @media (max-width: 600px) {
-    #controls { bottom: 1rem; left: 1rem; min-width: 180px; }
     #tooltip { right: 1rem; top: 72px; max-width: 200px; }
     .header-center { display: none; }
   }
@@ -181,26 +129,6 @@
 <!-- Count badge -->
 <div id="count-badge">Loading…</div>
 
-<!-- Controls panel -->
-<div id="controls">
-  <div class="ctrl-row">
-    <button id="play-btn" title="Play / Pause" aria-label="Play or Pause simulation">&#9646;&#9646;</button>
-    <div id="utc-time">—</div>
-  </div>
-  <div class="ctrl-row">
-    <span class="speed-label">Speed</span>
-    <input type="range" id="speed-slider" min="-1" max="1.699" step="0.05" value="0.477" aria-label="Simulation speed">
-    <span id="speed-val">3×</span>
-  </div>
-  <div class="legend">
-    <div class="legend-item">
-      <div class="legend-dot" style="background:#cc00ff"></div>
-      <span>Kuiper LEO</span>
-      <span class="legend-range">~590–630 km</span>
-    </div>
-  </div>
-</div>
-
 <!-- Satellite tooltip -->
 <div id="tooltip">
   <div class="tt-name" id="tt-name"></div>
@@ -231,7 +159,7 @@ const FETCH_URLS = [
   'https://api.allorigins.win/raw?url=' + encodeURIComponent(CELESTRAK_URL)
 ];
 
-// ── Orbit classification — all Kuiper sats are LEO, single neon purple ────────
+// ── Orbit classification ──────────────────────────────────────────────────────
 function classifyOrbit(altKm) {
   if (altKm < 2000)  return { band: 'LEO', color: '#cc00ff' };
   if (altKm < 35000) return { band: 'MEO', color: '#cc00ff' };
@@ -240,16 +168,11 @@ function classifyOrbit(altKm) {
 }
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
-const statusEl    = document.getElementById('loading-status');
-const progressEl  = document.getElementById('progress-bar');
-const overlay     = document.getElementById('loading-overlay');
-const countBadge  = document.getElementById('count-badge');
-const controlsEl  = document.getElementById('controls');
-const tooltip     = document.getElementById('tooltip');
-const playBtn     = document.getElementById('play-btn');
-const utcTimeEl   = document.getElementById('utc-time');
-const speedSlider = document.getElementById('speed-slider');
-const speedValEl  = document.getElementById('speed-val');
+const statusEl   = document.getElementById('loading-status');
+const progressEl = document.getElementById('progress-bar');
+const overlay    = document.getElementById('loading-overlay');
+const countBadge = document.getElementById('count-badge');
+const tooltip    = document.getElementById('tooltip');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function setStatus(msg)   { statusEl.textContent = msg; }
@@ -259,33 +182,13 @@ function dismissOverlay() {
   overlay.classList.add('fade-out');
   setTimeout(() => { overlay.style.display = 'none'; }, 750);
   countBadge.classList.add('visible');
-  controlsEl.classList.add('visible');
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
 let globe;
-let satData  = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
-let simTime  = new Date();
-let playing  = true;
-let speedMult = 3;
+let satData = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
 
-function frameStep() { return (1000 / 60) * speedMult; }
-
-// ── Speed slider (log scale: -1 → 0.1×, 1.699 → 50×) ────────────────────────
-function updateSpeedDisplay() {
-  speedMult = Math.pow(10, parseFloat(speedSlider.value));
-  speedValEl.textContent = speedMult < 10 ? speedMult.toFixed(1) + '×' : Math.round(speedMult) + '×';
-}
-speedSlider.addEventListener('input', updateSpeedDisplay);
-updateSpeedDisplay();
-
-// ── Play / Pause ──────────────────────────────────────────────────────────────
-playBtn.addEventListener('click', () => {
-  playing = !playing;
-  playBtn.innerHTML = playing ? '&#9646;&#9646;' : '&#9654;';
-});
-
-// ── Fetch with sessionStorage cache (stores raw text) ────────────────────────
+// ── Fetch with sessionStorage cache ──────────────────────────────────────────
 async function fetchWithCache() {
   try {
     const cached = sessionStorage.getItem(CACHE_KEY);
@@ -319,7 +222,6 @@ async function fetchWithCache() {
 
 // ── Parse 3-line TLE text ─────────────────────────────────────────────────────
 function parseTLE(rawText) {
-  // Split on newlines before name lines (lines not starting with '1' or '2')
   const chunks = rawText.replace(/\r/g, '')
     .split(/\n(?=[^12\s])/)
     .filter(c => c.trim());
@@ -336,12 +238,10 @@ function parseTLE(rawText) {
     try {
       const satrec = satellite.twoline2satrec(line1, line2);
       if (!satrec || satrec.error !== 0) continue;
-      // Pre-filter: skip satrecs that won't propagate
       if (!satellite.propagate(satrec, now)?.position) continue;
 
-      // Extract launch year from international designator (TLE line1 cols 10-11)
-      const yr2     = line1.substring(9, 11).trim();
-      const launch  = yr2 ? String((parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2)) : '—';
+      const yr2    = line1.substring(9, 11).trim();
+      const launch = yr2 ? String((parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2)) : '—';
 
       parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launch });
     } catch (_) {}
@@ -379,14 +279,14 @@ function initGlobe() {
   setStatus('Initialising globe…');
   setProgress(84);
 
-  const el = document.getElementById('globe-container');
+  // Compute initial positions before rendering
+  updatePositions();
 
-  // Globe global is set by the UMD script tag above
-  globe = new Globe(el)
+  globe = new Globe(document.getElementById('globe-container'))
     .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg')
     .atmosphereColor('#8750ff')
     .backgroundColor('rgba(14,14,14,1)')
-    .htmlElementsData([])
+    .htmlElementsData(satData)
     .htmlLat('lat')
     .htmlLng('lng')
     .htmlAltitude('alt')
@@ -396,7 +296,7 @@ function initGlobe() {
       el.style.cssText = 'font-size:11px;line-height:1;cursor:pointer;user-select:none;';
       el.addEventListener('mouseover', () => onSatHover(d));
       el.addEventListener('mouseout',  () => onSatHover(null));
-      el.addEventListener('click', () => onSatClick(d));
+      el.addEventListener('click',     () => onSatClick(d));
       return el;
     });
 
@@ -406,48 +306,46 @@ function initGlobe() {
   window.addEventListener('resize', () => globe.width(window.innerWidth).height(window.innerHeight));
 
   setProgress(94);
-  setStatus('Starting simulation…');
+  setStatus('Starting…');
   setTimeout(() => { setProgress(100); setTimeout(() => { dismissOverlay(); startAnimationLoop(); }, 300); }, 500);
 }
 
-// ── Animation loop ────────────────────────────────────────────────────────────
+// ── Position update — mutates data objects in place ───────────────────────────
+function updatePositions() {
+  const now  = new Date();
+  const gmst = satellite.gstime(now);
+  satData.forEach(d => {
+    const eci = satellite.propagate(d.satrec, now);
+    if (eci?.position) {
+      const geo = satellite.eciToGeodetic(eci.position, gmst);
+      d.lat   = satellite.radiansToDegrees(geo.latitude);
+      d.lng   = satellite.radiansToDegrees(geo.longitude);
+      d.alt   = geo.height / EARTH_RADIUS_KM;
+      d.altKm = Math.round(geo.height);
+      const cls = classifyOrbit(geo.height);
+      d.band  = cls.band;
+      d.color = cls.color;
+    } else {
+      d.lat = NaN;
+    }
+  });
+}
+
+// ── Animation loop — updates positions, globe.gl repositions elements itself ──
 function startAnimationLoop() {
   (function frame() {
     requestAnimationFrame(frame);
-
-    if (playing) simTime = new Date(+simTime + frameStep());
-
-    const iso = simTime.toISOString();
-    utcTimeEl.textContent = iso.slice(0, 10) + ' ' + iso.slice(11, 19) + ' UTC';
-
-    const gmst = satellite.gstime(simTime);
-    satData.forEach(d => {
-      const eci = satellite.propagate(d.satrec, simTime);
-      if (eci?.position) {
-        const geo = satellite.eciToGeodetic(eci.position, gmst);
-        d.lat   = satellite.radiansToDegrees(geo.latitude);
-        d.lng   = satellite.radiansToDegrees(geo.longitude);
-        d.alt   = geo.height / EARTH_RADIUS_KM;
-        d.altKm = Math.round(geo.height);
-        const cls  = classifyOrbit(geo.height);
-        d.band  = cls.band;
-        d.color = cls.color;
-      } else {
-        d.lat = NaN;
-      }
-    });
-
-    if (globe) globe.htmlElementsData(satData.filter(d => !isNaN(d.lat)));
+    updatePositions();
   })();
 }
 
 // ── Hover handler ─────────────────────────────────────────────────────────────
 function onSatHover(sat) {
   if (!sat) { tooltip.classList.remove('visible'); return; }
-  document.getElementById('tt-name').textContent   = sat.name;
-  document.getElementById('tt-alt').textContent    = sat.altKm.toLocaleString() + ' km';
+  document.getElementById('tt-name').textContent    = sat.name;
+  document.getElementById('tt-alt').textContent     = sat.altKm.toLocaleString() + ' km';
   document.getElementById('tt-country').textContent = '—';
-  document.getElementById('tt-launch').textContent = sat.launch;
+  document.getElementById('tt-launch').textContent  = sat.launch;
   const bandEl = document.getElementById('tt-band');
   bandEl.textContent = sat.band;
   bandEl.style.color = sat.color;
