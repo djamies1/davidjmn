@@ -163,11 +163,11 @@ import * as satellite from 'https://esm.sh/satellite.js';
 import { feature as topoFeature } from 'https://esm.sh/topojson-client';
 
 const EARTH_RADIUS_KM = 6371;
-const CACHE_KEY    = 'satTracker_kuiper_v2'; // bumped: now caches JSON not TLE text
+const CACHE_KEY    = 'satTracker_kuiper_v1';
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
-// CelesTrak JSON format — includes LAUNCH_DATE per satellite
-const CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON';
+// TLE text format — proven reliable for orbit propagation
+const CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=TLE';
 const FETCH_URLS = [
   CELESTRAK_URL,
   'https://corsproxy.io/?' + CELESTRAK_URL,
@@ -203,9 +203,21 @@ function dismissOverlay() {
 let globe;
 let satData = [];
 
-// ── Rocket info — Launch Library 2, fires immediately in parallel ─────────────
-// Builds a map of { "YYYY-MM-DD": "Rocket Name" } for matching against launch dates
-const rocketInfoPromise = fetch(
+// ── Launch metadata — two non-blocking parallel fetches ───────────────────────
+// 1. CelesTrak JSON for launch dates (launchId → date)
+const launchDatesPromise = fetch(
+  'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON'
+).then(r => r.json()).then(records => {
+  const map = {};
+  for (const rec of records) {
+    const m = (rec.OBJECT_ID || '').match(/^(\d{4})-(\d+)/);
+    if (m && rec.LAUNCH_DATE) map[`${m[1]}-${m[2].padStart(3, '0')}`] = rec.LAUNCH_DATE;
+  }
+  return map;
+}).catch(() => ({}));
+
+// 2. Launch Library 2 for rocket names (date → rocket)
+const rocketNamesPromise = fetch(
   'https://ll.thespacedevs.com/2.2.0/launch/?search=kuiper&limit=50&format=json'
 ).then(r => r.json()).then(data => {
   const map = {};
@@ -216,7 +228,17 @@ const rocketInfoPromise = fetch(
   return map;
 }).catch(() => ({}));
 
-// ── Country data — fires immediately in parallel ──────────────────────────────
+// Combined: launchId → { date, rocket }
+const launchMetaPromise = Promise.all([launchDatesPromise, rocketNamesPromise])
+  .then(([dateMap, rocketMap]) => {
+    const combined = {};
+    for (const [id, date] of Object.entries(dateMap)) {
+      combined[id] = { date, rocket: rocketMap[date] || '—' };
+    }
+    return combined;
+  }).catch(() => ({}));
+
+// ── Country data ──────────────────────────────────────────────────────────────
 const countryDataPromise = (async () => {
   const [topoResp, countriesResp] = await Promise.all([
     fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'),
@@ -232,18 +254,16 @@ const countryDataPromise = (async () => {
 
 // ── Launch table ──────────────────────────────────────────────────────────────
 function buildLaunchTable() {
-  // Group satData by launchId, capturing the launch date
-  const launches = {};
-  satData.forEach(d => {
-    if (!launches[d.launchId]) launches[d.launchId] = { date: d.launchDate, count: 0 };
-    launches[d.launchId].count++;
-  });
+  const counts = {};
+  satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
 
-  const render = rocketMap => {
-    const rows = Object.entries(launches)
+  const render = meta => {
+    const rows = Object.entries(counts)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, { date, count }]) => {
-        const rocket = rocketMap[date] || '—';
+      .map(([id, count]) => {
+        const info   = meta[id] || {};
+        const date   = info.date   || id;   // fall back to launchId if date unavailable
+        const rocket = info.rocket || '—';
         return `<div class="lt-row">
           <span>${date}</span>
           <span class="lt-rocket">${rocket}</span>
@@ -253,8 +273,8 @@ function buildLaunchTable() {
     document.getElementById('lt-body').innerHTML = rows;
   };
 
-  render({}); // immediate render without rocket info
-  rocketInfoPromise.then(render); // re-render once rocket data arrives
+  render({});                       // immediate: shows launchId as placeholder date
+  launchMetaPromise.then(render);   // re-renders with actual date + rocket when ready
 }
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
@@ -278,7 +298,7 @@ async function fetchWithCache() {
       clearTimeout(tid);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const text = await resp.text();
-      if (!text.includes('TLE_LINE1') || text.length < 100) throw new Error('Response does not look like GP JSON');
+      if (!text.includes('1 ') || text.length < 100) throw new Error('Response does not look like TLE data');
       try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ text, ts: Date.now() })); } catch (_) {}
       return text;
     } catch (e) {
@@ -289,29 +309,31 @@ async function fetchWithCache() {
   throw lastErr;
 }
 
-// ── Parse CelesTrak GP JSON ───────────────────────────────────────────────────
-function parseSatData(records) {
+// ── Parse TLE text ────────────────────────────────────────────────────────────
+function parseTLE(rawText) {
+  const chunks = rawText.replace(/\r/g, '').split(/\n(?=[^12\s])/).filter(c => c.trim());
   const now    = new Date();
   const parsed = [];
 
-  for (const rec of records) {
-    if (!rec.TLE_LINE1 || !rec.TLE_LINE2) continue;
+  for (const chunk of chunks) {
+    const parts = chunk.split('\n').map(l => l.trim()).filter(Boolean);
+    if (parts.length < 3) continue;
+    const [nameLine, line1, line2] = parts;
+    if (!line1.startsWith('1 ') || !line2.startsWith('2 ')) continue;
+
     try {
-      const satrec = satellite.twoline2satrec(rec.TLE_LINE1, rec.TLE_LINE2);
+      const satrec = satellite.twoline2satrec(line1, line2);
       if (!satrec || satrec.error !== 0) continue;
       if (!satellite.propagate(satrec, now)?.position) continue;
 
-      // COSPAR ID e.g. "2024-065A" → launchId "2024-065"
-      const cospar   = (rec.OBJECT_ID || '').trim();
-      const m        = cospar.match(/^(\d{4})-(\d+)/);
-      const launchId = m ? `${m[1]}-${m[2].padStart(3, '0')}` : '—';
+      // Extract launchId from international designator in TLE line 1
+      // e.g. "24065A" → "2024-065"
+      const yr2      = line1.substring(9, 11).trim();
+      const launchNum = line1.substring(11, 14).trim();
+      const year     = yr2 ? (parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2) : null;
+      const launchId = year && launchNum ? `${year}-${launchNum.padStart(3, '0')}` : '—';
 
-      parsed.push({
-        satrec,
-        name:       (rec.OBJECT_NAME || '').trim(),
-        launchDate: rec.LAUNCH_DATE || '—',
-        launchId,
-      });
+      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launchId });
     } catch (_) {}
   }
   return parsed;
@@ -331,10 +353,10 @@ async function loadSatelliteData() {
     return;
   }
 
-  setStatus('Parsing satellite data…');
+  setStatus('Parsing TLE data…');
   setProgress(42);
 
-  satData = parseSatData(JSON.parse(rawText));
+  satData = parseTLE(rawText);
   console.log('Valid satellites:', satData.length);
   buildLaunchTable();
 
@@ -370,7 +392,6 @@ function initGlobe() {
   countBadge.textContent = satData.length.toLocaleString() + ' satellites tracked';
   window.addEventListener('resize', () => globe.width(window.innerWidth).height(window.innerHeight));
 
-  // Apply country borders + labels once data is ready (non-blocking)
   countryDataPromise.then(({ polygons, labels }) => {
     globe
       .polygonsData(polygons.features)
@@ -393,7 +414,7 @@ function initGlobe() {
   setTimeout(() => { setProgress(100); setTimeout(() => { dismissOverlay(); startAnimationLoop(); }, 300); }, 500);
 }
 
-// ── Position update — mutates data objects in place ───────────────────────────
+// ── Position update ───────────────────────────────────────────────────────────
 function updatePositions() {
   const now  = new Date();
   const gmst = satellite.gstime(now);
