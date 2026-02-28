@@ -114,23 +114,22 @@
   .toggle-btn.kuiper .dot   { background: #cc00ff; box-shadow: 0 0 5px 2px rgba(204,0,255,0.5); }
   .toggle-btn.starlink .dot { background: #00d4ff; box-shadow: 0 0 5px 2px rgba(0,212,255,0.5); border-radius: 0; }
   .toggle-btn:not(.active) .dot { opacity: 0.25; box-shadow: none; }
-  /* Coverage toggle — ring-shaped indicator */
-  .toggle-btn.coverage.active { border-color: rgba(204,0,255,0.3); color: rgba(255,255,255,0.85); }
-  .toggle-btn.coverage .dot {
-    background: transparent; border: 1.5px solid #cc00ff;
-    box-shadow: 0 0 4px 1px rgba(204,0,255,0.4); border-radius: 50%;
-  }
 
-  /* ── FCC Milestone panel — fixed bottom-right ── */
+  /* ── Left column (milestone + launches stacked) ── */
+  #left-column {
+    position: fixed; top: 5.5rem; left: 1.75rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+    z-index: 100; opacity: 0; transition: opacity 0.5s ease;
+    max-height: calc(100vh - 6rem);
+  }
+  #left-column.visible { opacity: 1; }
+
+  /* ── FCC Milestone panel ── */
   #milestone-panel {
-    position: fixed; bottom: 1.75rem; right: 1.75rem;
     background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
     border-radius: 6px; padding: 0.75rem 1rem;
-    z-index: 100; min-width: 245px;
-    backdrop-filter: blur(12px);
-    opacity: 0; transition: opacity 0.5s ease;
+    min-width: 280px; backdrop-filter: blur(12px);
   }
-  #milestone-panel.visible { opacity: 1; }
   .ms-title { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--gold); margin-bottom: 0.65rem; }
   .ms-row { margin-bottom: 0.6rem; }
   .ms-row:last-child { margin-bottom: 0; }
@@ -142,15 +141,11 @@
 
   /* ── Launch table ── */
   #launch-table {
-    position: fixed; top: 5.5rem; left: 1.75rem;
     background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
     border-radius: 6px; padding: 0.75rem 1rem;
-    z-index: 100; min-width: 280px;
-    backdrop-filter: blur(12px);
-    max-height: calc(100vh - 8rem); overflow-y: auto;
-    opacity: 0; transition: opacity 0.5s ease;
+    min-width: 280px; backdrop-filter: blur(12px);
+    overflow-y: auto; flex-shrink: 1; min-height: 0;
   }
-  #launch-table.visible { opacity: 1; }
   .lt-title {
     font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--gold); margin-bottom: 0.5rem;
@@ -186,8 +181,7 @@
   /* ── Mobile tweaks ── */
   @media (max-width: 600px) {
     .header-center { display: none; }
-    #launch-table { display: none; }
-    #milestone-panel { display: none; }
+    #left-column { display: none; }
   }
 </style>
 </head>
@@ -220,21 +214,20 @@
 <!-- Toggle panel -->
 <div id="toggle-panel">
   <button id="toggle-kuiper"   class="toggle-btn kuiper active"><span class="dot"></span>Kuiper</button>
-  <button id="toggle-starlink" class="toggle-btn starlink active"><span class="dot"></span>Starlink</button>
-  <button id="toggle-coverage" class="toggle-btn coverage active"><span class="dot"></span>Footprints</button>
+  <button id="toggle-starlink" class="toggle-btn starlink"><span class="dot"></span>Starlink</button>
 </div>
 
-<!-- FCC milestone tracker -->
-<div id="milestone-panel">
-  <div class="ms-title">FCC Milestones — Kuiper</div>
-  <div id="ms-rows"></div>
-</div>
-
-<!-- Launch table -->
-<div id="launch-table">
-  <div class="lt-title">Kuiper Launches</div>
-  <div class="lt-head"><span>Date</span><span>Rocket</span><span>Sats</span></div>
-  <div id="lt-body"></div>
+<!-- Left column: milestone tracker + launch table -->
+<div id="left-column">
+  <div id="milestone-panel">
+    <div class="ms-title">FCC Milestones — Kuiper</div>
+    <div id="ms-rows"></div>
+  </div>
+  <div id="launch-table">
+    <div class="lt-title">Kuiper Launches</div>
+    <div class="lt-head"><span>Date</span><span>Rocket</span><span>Sats</span></div>
+    <div id="lt-body"></div>
+  </div>
 </div>
 
 <!-- ── Libraries ── -->
@@ -282,9 +275,8 @@ function dismissOverlay() {
   overlay.classList.add('fade-out');
   setTimeout(() => { overlay.style.display = 'none'; }, 750);
   countBadge.classList.add('visible');
-  document.getElementById('launch-table').classList.add('visible');
+  document.getElementById('left-column').classList.add('visible');
   document.getElementById('toggle-panel').classList.add('visible');
-  document.getElementById('milestone-panel').classList.add('visible');
 }
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -292,8 +284,7 @@ let globe;
 let kuiperData   = [];
 let starlinkData = [];
 let showKuiper   = true;
-let showStarlink = true;
-let showCoverage = true;
+let showStarlink = false;
 let countriesCache = null;
 
 function visibleData() {
@@ -344,7 +335,7 @@ function coverageCircle(lat, lng, radiusDeg = COVERAGE_RADIUS_DEG, n = 32) {
 
 function updateCoveragePolygons() {
   if (!globe || !countriesCache) return;
-  const circles = (showCoverage && showKuiper)
+  const circles = showKuiper
     ? kuiperData.filter(d => !isNaN(d.lat)).map(d => coverageCircle(d.lat, d.lng))
     : [];
   globe.polygonsData([...countriesCache.features, ...circles]);
@@ -727,11 +718,6 @@ document.getElementById('toggle-starlink').addEventListener('click', () => {
   updateCountBadge();
 });
 
-document.getElementById('toggle-coverage').addEventListener('click', () => {
-  showCoverage = !showCoverage;
-  document.getElementById('toggle-coverage').classList.toggle('active', showCoverage);
-  updateCoveragePolygons();
-});
 
 loadSatelliteData();
 </script>
