@@ -85,7 +85,7 @@
     position: fixed; top: 5.5rem; left: 1.75rem;
     background: rgba(14,14,14,0.88); border: 1px solid var(--gold-border);
     border-radius: 6px; padding: 0.75rem 1rem;
-    z-index: 100; min-width: 170px;
+    z-index: 100; min-width: 280px;
     backdrop-filter: blur(12px);
     max-height: calc(100vh - 8rem); overflow-y: auto;
     opacity: 0; transition: opacity 0.5s ease;
@@ -95,16 +95,27 @@
     font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--gold); margin-bottom: 0.5rem;
   }
-  .lt-row {
-    display: flex; justify-content: space-between; gap: 1.5rem;
+  .lt-head, .lt-row {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr 2rem;
+    gap: 0.6rem;
     font-size: 0.67rem; font-family: monospace;
-    color: rgba(255,255,255,0.45); padding: 0.12rem 0;
+    padding: 0.12rem 0;
   }
-  .lt-row span:last-child { color: var(--gold-light); }
+  .lt-head {
+    font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(255,255,255,0.25);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding-bottom: 0.35rem; margin-bottom: 0.15rem;
+  }
+  .lt-row { color: rgba(255,255,255,0.45); }
+  .lt-row span:last-child { color: var(--gold-light); text-align: right; }
+  .lt-row .lt-rocket { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ── Mobile tweaks ── */
   @media (max-width: 600px) {
     .header-center { display: none; }
+    #launch-table { display: none; }
   }
 </style>
 </head>
@@ -137,6 +148,7 @@
 <!-- Launch table -->
 <div id="launch-table">
   <div class="lt-title">Launches</div>
+  <div class="lt-head"><span>Date</span><span>Rocket</span><span>Sats</span></div>
   <div id="lt-body"></div>
 </div>
 
@@ -151,11 +163,11 @@ import * as satellite from 'https://esm.sh/satellite.js';
 import { feature as topoFeature } from 'https://esm.sh/topojson-client';
 
 const EARTH_RADIUS_KM = 6371;
-const CACHE_KEY = 'satTracker_kuiper_v1';
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const CACHE_KEY    = 'satTracker_kuiper_v2'; // bumped: now caches JSON not TLE text
+const CACHE_TTL_MS = 15 * 60 * 1000;
 
-// Kuiper-only TLE feed
-const CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=TLE';
+// CelesTrak JSON format — includes LAUNCH_DATE per satellite
+const CELESTRAK_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=kuiper&FORMAT=JSON';
 const FETCH_URLS = [
   CELESTRAK_URL,
   'https://corsproxy.io/?' + CELESTRAK_URL,
@@ -187,21 +199,24 @@ function dismissOverlay() {
   document.getElementById('launch-table').classList.add('visible');
 }
 
-function buildLaunchTable() {
-  const counts = {};
-  satData.forEach(d => { counts[d.launchId] = (counts[d.launchId] || 0) + 1; });
-  const rows = Object.entries(counts)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, n]) => `<div class="lt-row"><span>${id}</span><span>${n}</span></div>`)
-    .join('');
-  document.getElementById('lt-body').innerHTML = rows;
-}
-
 // ── State ────────────────────────────────────────────────────────────────────
 let globe;
-let satData = []; // { satrec, name, launch, lat, lng, alt, band, color, altKm }
+let satData = [];
 
-// ── Country data — fetched in parallel with satellite data ────────────────────
+// ── Rocket info — Launch Library 2, fires immediately in parallel ─────────────
+// Builds a map of { "YYYY-MM-DD": "Rocket Name" } for matching against launch dates
+const rocketInfoPromise = fetch(
+  'https://ll.thespacedevs.com/2.2.0/launch/?search=kuiper&limit=50&format=json'
+).then(r => r.json()).then(data => {
+  const map = {};
+  for (const launch of data.results || []) {
+    const date = (launch.net || '').slice(0, 10);
+    if (date) map[date] = launch.rocket?.configuration?.name || '—';
+  }
+  return map;
+}).catch(() => ({}));
+
+// ── Country data — fires immediately in parallel ──────────────────────────────
 const countryDataPromise = (async () => {
   const [topoResp, countriesResp] = await Promise.all([
     fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'),
@@ -214,6 +229,33 @@ const countryDataPromise = (async () => {
     .map(c => ({ lat: c.latlng[0], lng: c.latlng[1], text: c.name.common }));
   return { polygons, labels };
 })();
+
+// ── Launch table ──────────────────────────────────────────────────────────────
+function buildLaunchTable() {
+  // Group satData by launchId, capturing the launch date
+  const launches = {};
+  satData.forEach(d => {
+    if (!launches[d.launchId]) launches[d.launchId] = { date: d.launchDate, count: 0 };
+    launches[d.launchId].count++;
+  });
+
+  const render = rocketMap => {
+    const rows = Object.entries(launches)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, { date, count }]) => {
+        const rocket = rocketMap[date] || '—';
+        return `<div class="lt-row">
+          <span>${date}</span>
+          <span class="lt-rocket">${rocket}</span>
+          <span>${count}</span>
+        </div>`;
+      }).join('');
+    document.getElementById('lt-body').innerHTML = rows;
+  };
+
+  render({}); // immediate render without rocket info
+  rocketInfoPromise.then(render); // re-render once rocket data arrives
+}
 
 // ── Fetch with sessionStorage cache ──────────────────────────────────────────
 async function fetchWithCache() {
@@ -236,7 +278,7 @@ async function fetchWithCache() {
       clearTimeout(tid);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const text = await resp.text();
-      if (!text.includes('1 ') || text.length < 100) throw new Error('Response does not look like TLE data');
+      if (!text.includes('TLE_LINE1') || text.length < 100) throw new Error('Response does not look like GP JSON');
       try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ text, ts: Date.now() })); } catch (_) {}
       return text;
     } catch (e) {
@@ -247,33 +289,29 @@ async function fetchWithCache() {
   throw lastErr;
 }
 
-// ── Parse 3-line TLE text ─────────────────────────────────────────────────────
-function parseTLE(rawText) {
-  const chunks = rawText.replace(/\r/g, '')
-    .split(/\n(?=[^12\s])/)
-    .filter(c => c.trim());
-
+// ── Parse CelesTrak GP JSON ───────────────────────────────────────────────────
+function parseSatData(records) {
   const now    = new Date();
   const parsed = [];
 
-  for (const chunk of chunks) {
-    const parts = chunk.split('\n').map(l => l.trim()).filter(Boolean);
-    if (parts.length < 3) continue;
-    const [nameLine, line1, line2] = parts;
-    if (!line1.startsWith('1 ') || !line2.startsWith('2 ')) continue;
-
+  for (const rec of records) {
+    if (!rec.TLE_LINE1 || !rec.TLE_LINE2) continue;
     try {
-      const satrec = satellite.twoline2satrec(line1, line2);
+      const satrec = satellite.twoline2satrec(rec.TLE_LINE1, rec.TLE_LINE2);
       if (!satrec || satrec.error !== 0) continue;
       if (!satellite.propagate(satrec, now)?.position) continue;
 
-      const yr2      = line1.substring(9, 11).trim();
-      const launchNum = line1.substring(11, 14).trim();
-      const year     = yr2 ? (parseInt(yr2) > 56 ? 1900 : 2000) + parseInt(yr2) : null;
-      const launch   = year ? String(year) : '—';
-      const launchId = year && launchNum ? `${year}-${launchNum.padStart(3, '0')}` : '—';
+      // COSPAR ID e.g. "2024-065A" → launchId "2024-065"
+      const cospar   = (rec.OBJECT_ID || '').trim();
+      const m        = cospar.match(/^(\d{4})-(\d+)/);
+      const launchId = m ? `${m[1]}-${m[2].padStart(3, '0')}` : '—';
 
-      parsed.push({ satrec, name: nameLine.replace(/^0 /, '').trim(), launch, launchId });
+      parsed.push({
+        satrec,
+        name:       (rec.OBJECT_NAME || '').trim(),
+        launchDate: rec.LAUNCH_DATE || '—',
+        launchId,
+      });
     } catch (_) {}
   }
   return parsed;
@@ -293,10 +331,10 @@ async function loadSatelliteData() {
     return;
   }
 
-  setStatus('Parsing TLE data…');
+  setStatus('Parsing satellite data…');
   setProgress(42);
 
-  satData = parseTLE(rawText);
+  satData = parseSatData(JSON.parse(rawText));
   console.log('Valid satellites:', satData.length);
   buildLaunchTable();
 
@@ -376,7 +414,7 @@ function updatePositions() {
   });
 }
 
-// ── Animation loop — mutate positions; globe.gl re-reads each frame ───────────
+// ── Animation loop ────────────────────────────────────────────────────────────
 function startAnimationLoop() {
   (function frame() {
     requestAnimationFrame(frame);
