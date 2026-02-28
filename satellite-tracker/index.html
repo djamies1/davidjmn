@@ -80,25 +80,8 @@
   }
   #count-badge.visible { opacity: 1; }
 
-  /* ── Satellite tooltip ── */
-  #tooltip {
-    position: fixed; top: 78px; right: 1.75rem;
-    background: rgba(14,14,14,0.92); border: 1px solid var(--gold-border);
-    border-radius: 6px; padding: 0.85rem 1rem;
-    z-index: 200; min-width: 195px; max-width: 255px;
-    backdrop-filter: blur(12px);
-    opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
-  }
-  #tooltip.visible { opacity: 1; }
-
-  .tt-name { font-family: 'Playfair Display', serif; font-size: 0.92rem; font-weight: 700; color: #fff; margin-bottom: 0.55rem; line-height: 1.25; }
-  .tt-row { display: flex; justify-content: space-between; font-size: 0.7rem; color: rgba(255,255,255,0.4); margin-bottom: 0.18rem; gap: 0.5rem; }
-  .tt-row span:last-child { color: rgba(255,255,255,0.78); text-align: right; }
-  .tt-band { display: inline-block; font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 0.13rem 0.42rem; border-radius: 2px; margin-top: 0.4rem; border: 1px solid; }
-
   /* ── Mobile tweaks ── */
   @media (max-width: 600px) {
-    #tooltip { right: 1rem; top: 72px; max-width: 200px; }
     .header-center { display: none; }
   }
 </style>
@@ -128,15 +111,6 @@
 
 <!-- Count badge -->
 <div id="count-badge">Loading…</div>
-
-<!-- Satellite tooltip -->
-<div id="tooltip">
-  <div class="tt-name" id="tt-name"></div>
-  <div class="tt-row"><span>Altitude</span><span id="tt-alt"></span></div>
-  <div class="tt-row"><span>Country</span><span id="tt-country"></span></div>
-  <div class="tt-row"><span>Launch</span><span id="tt-launch"></span></div>
-  <div><span class="tt-band" id="tt-band"></span></div>
-</div>
 
 <!-- ── Libraries ── -->
 <script src="https://cdn.jsdelivr.net/npm/globe.gl"></script>
@@ -173,7 +147,6 @@ const statusEl   = document.getElementById('loading-status');
 const progressEl = document.getElementById('progress-bar');
 const overlay    = document.getElementById('loading-overlay');
 const countBadge = document.getElementById('count-badge');
-const tooltip    = document.getElementById('tooltip');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function setStatus(msg)   { statusEl.textContent = msg; }
@@ -294,19 +267,22 @@ function initGlobe() {
   setStatus('Initialising globe…');
   setProgress(84);
 
+  updatePositions();
+
   globe = new Globe(document.getElementById('globe-container'))
     .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-dark.jpg')
     .atmosphereColor('#8750ff')
     .backgroundColor('rgba(14,14,14,1)')
-    .pointsData(satData)
-    .pointLat('lat')
-    .pointLng('lng')
-    .pointAltitude('alt')
-    .pointColor(() => '#cc00ff')
-    .pointRadius(0.3)
-    .pointResolution(6)
-    .onPointHover(d => onSatHover(d))
-    .onPointClick(d => onSatClick(d));
+    .htmlElementsData(satData)
+    .htmlLat('lat')
+    .htmlLng('lng')
+    .htmlAltitude('alt')
+    .htmlElement(() => {
+      const el = document.createElement('div');
+      el.innerHTML = '🛰️';
+      el.style.cssText = 'font-size:11px;line-height:1;user-select:none;pointer-events:none;';
+      return el;
+    });
 
   setTimeout(() => globe.pointOfView({ altitude: 3.5 }));
 
@@ -324,8 +300,9 @@ function initGlobe() {
       .labelLat('lat')
       .labelLng('lng')
       .labelText('text')
-      .labelSize(1.2)
-      .labelDotRadius(0.4)
+      .labelAltitude(0.01)
+      .labelSize(0.6)
+      .labelDotRadius(0.3)
       .labelColor(() => 'rgba(255,255,255,0.7)')
       .labelResolution(3);
   }).catch(e => console.warn('Country overlay failed:', e));
@@ -356,34 +333,12 @@ function updatePositions() {
   });
 }
 
-// ── Animation loop — update positions and refresh globe point data ────────────
+// ── Animation loop — mutate positions; globe.gl re-reads each frame ───────────
 function startAnimationLoop() {
-  function tick() {
+  (function frame() {
+    requestAnimationFrame(frame);
     updatePositions();
-    if (globe) globe.pointsData(satData);
-  }
-  tick();
-  setInterval(tick, 1000);
-}
-
-// ── Hover handler ─────────────────────────────────────────────────────────────
-function onSatHover(sat) {
-  if (!sat) { tooltip.classList.remove('visible'); return; }
-  document.getElementById('tt-name').textContent    = sat.name;
-  document.getElementById('tt-alt').textContent     = sat.altKm.toLocaleString() + ' km';
-  document.getElementById('tt-country').textContent = '—';
-  document.getElementById('tt-launch').textContent  = sat.launch;
-  const bandEl = document.getElementById('tt-band');
-  bandEl.textContent = sat.band;
-  bandEl.style.color = sat.color;
-  bandEl.style.borderColor = sat.color;
-  tooltip.classList.add('visible');
-}
-
-// ── Click handler — camera fly-to ────────────────────────────────────────────
-function onSatClick(sat) {
-  if (!sat || !globe) return;
-  globe.pointOfView({ lat: sat.lat, lng: sat.lng, altitude: 0.5 }, 1500);
+  })();
 }
 
 loadSatelliteData();
